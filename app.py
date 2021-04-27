@@ -10,7 +10,7 @@ def index():
 @app.route('/alta', methods=['GET', 'POST'])
 def alta():
     if request.method == 'GET':
-        args = request.args
+        args = request.form
         # print(args)
 
     return args

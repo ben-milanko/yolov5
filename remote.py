@@ -1,20 +1,16 @@
-import rpyc
+import socket
 
-class MyService(rpyc.Service):
-    def on_connect(self, conn):
-        # code that runs when a connection is created
-        # (to init the service, if needed)
-        pass
+HOST = '192.168.1.8'  # Standard loopback interface address (localhost)
+PORT = 65432        # Port to listen on (non-privileged ports are > 1023)
 
-    def on_disconnect(self, conn):
-        # code that runs after the connection has already closed
-        # (to finalize the service, if needed)
-        pass
-
-    def exposed_get_answer(self): # this is an exposed method
-        return 42
-
-    exposed_the_real_answer_though = 43     # an exposed attribute
-
-    def get_question(self):  # while this method is not exposed
-        return "what is the airspeed velocity of an unladen swallow?"
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind((HOST, PORT))
+    s.listen()
+    conn, addr = s.accept()
+    with conn:
+        print('Connected by', addr)
+        while True:
+            data = conn.recv(1024)
+            if not data:
+                break
+            conn.sendall(data)
