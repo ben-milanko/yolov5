@@ -2,7 +2,9 @@ import argparse
 import time
 from pathlib import Path
 
+import socket
 import cv2
+import numpy
 import requests
 import torch
 import torch.backends.cudnn as cudnn
@@ -16,14 +18,22 @@ from utils.general import check_img_size, check_requirements, check_imshow, non_
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
-valid_classes = ['car', 'truck', 'pedestrian', 'person', 'bicycle']
+HOST = '192.168.1.8'  # The server's hostname or IP address
+PORT = 65432        # The port used by the server
+
+valid_classes = ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck', #'traffic light',
+         'fire hydrant', 'stop sign', 'parking meter']
+
 def detect(save_img=False):
     source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
     save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
         ('rtsp://', 'rtmp://', 'http://', 'https://'))
     
-    node = platform.node()
+    #node = platform.node()
+
+    soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    soc.connect((HOST, PORT))
 
     # Directories
     save_dir = Path(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))  # increment run
@@ -114,7 +124,7 @@ def detect(save_img=False):
 
                     class_name = names[int(cls)]
                     if conf > 0.5 and class_name in valid_classes:
-                        results.append([class_name, xywh])
+                        results.append([int(cls), *xywh])
 
                     if save_txt:  # Write to file
                         line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
@@ -125,11 +135,9 @@ def detect(save_img=False):
                         label = f'{names[int(cls)]} {conf:.2f}'
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
             
-            requests.get(f'{opt.server}:5000/{node}', params={'results': results})
-            # Print time (inference + NMS)
-            # print(f'{s}Done. ({t2 - t1:.3f}s)')
-            # print(results)
-            # Stream results
+            npresults = numpy.asarray(results)
+            soc.sendall(npresults)
+
             if view_img:
                 cv2.imshow(str(p), im0)
                 cv2.waitKey(1)  # 1 millisecond
