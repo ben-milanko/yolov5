@@ -334,6 +334,10 @@ class LoadStreams:  # multiple IP or RTSP cameras
         # Letterbox
         img = [letterbox(x, self.img_size, auto=self.rect, stride=self.stride)[0] for x in img0]
 
+#         [[136.    0.  960. ]
+#  [  0.   76.5 540. ]
+#  [  0.    0.    1. ]] [-3.36041e-03  6.01800e-06  0.00000e+00  0.00000e+00]
+
         # Stack
         img = np.stack(img, 0)
 
