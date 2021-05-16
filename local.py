@@ -194,7 +194,7 @@ def main(args):
         # for key in clients:
         #     print(key)
         # clients[client_address].recv(2048)
-        client_address.recv(2048)
+        client_socket.recv(2048)
 
         data = np.frombuffer(recieved_data)
         cls = []
