@@ -191,7 +191,17 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     print(opt)
     check_requirements(exclude=('pycocotools', 'thop'))
-    
+
+    if opt.source == 'data/images':
+        hostname = socket.gethostname()
+
+        if hostname == 'alta':
+            opt.source = 'https://www.youtube.com/watch?v=1EiC9bvVGnk'
+        elif hostname == 'chamonix':
+            opt.source = 'https://www.youtube.com/watch?v=DoUOrTJbIu4'
+        elif hostname == 'hakuba':
+            opt.source = 'https://www.youtube.com/watch?v=6aJXND_Lfk8'
+
     with torch.no_grad():
         if opt.update:  # update all models (to fix SourceChangeWarning)
             for opt.weights in ['yolov5s.pt', 'yolov5m.pt', 'yolov5l.pt', 'yolov5x.pt']:
