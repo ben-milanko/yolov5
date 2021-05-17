@@ -5,6 +5,7 @@ from datetime import datetime
 import itertools
 import socket
 import math
+import sys
 from typing import Iterable
 import cv2
 import pprint as pp
@@ -12,12 +13,25 @@ import numpy as np
 from pykalman import KalmanFilter
 from dataclasses import dataclass
 from statsmodels.tsa.arima.model import ARIMA
+import socketserver
+import threading
 
-DISTANCE_LIMIT = 200
-TRACK_LENGTH = 20
-FILT_LENGTH = 4
+DISTANCE_LIMIT = 400
+TRACK_LENGTH = 50
+FILT_LENGTH = 8
+
+SERVER_HOST = '192.168.1.8'  # Standard loopback interface address (whistler)
+# Port to listen on (non-privileged ports are > 1023)
+SERVER_PORT = 65432
+
+UI_HOST = '192.168.1.8'
+UI_PORT = 7777
 
 assert FILT_LENGTH <= TRACK_LENGTH
+
+classes = {0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck', 9: 'traffic light',
+           10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter'}
+
 
 @dataclass
 class Position:
@@ -32,7 +46,7 @@ class PersistentObject():
         self.track = collections.deque(maxlen=TRACK_LENGTH)
         self.last_assigned_frame = last_assigned_frame
         self.track.append(initial_pos)
-        
+
         self.velocity = 0
         self.rotation = 0
         self.no_detections = 0
@@ -40,18 +54,21 @@ class PersistentObject():
         self.filtered: Position = initial_pos
         self.filtered_previous: Position = None
 
-    def add_position(self, pos: Position, frame: int, repeat: bool=False):
+    def add_position(self, pos: Position, frame: int, repeat: bool = False):
         self.last_assigned_frame = frame
-        
+
         if len(self.track) >= 1:
             self.set_filtered()
             delta_t = (pos.t-self.track[-1].t).total_seconds()
             if delta_t > 0:
                 delta_x = self.filtered_previous.x - self.filtered.x
                 delta_y = self.filtered_previous.y - self.filtered.y
-                
+
                 self.velocity = np.linalg.norm((delta_x, delta_y)) / delta_t
-                self.rotation = np.arctan(delta_y / delta_x)
+                if delta_x == 0:
+                    self.rotation = 0
+                else:
+                    self.rotation = np.arctan(delta_y / delta_x)
 
         self.track.append(pos)
         if not repeat:
@@ -64,19 +81,23 @@ class PersistentObject():
         return self.filtered
 
     def set_filtered(self) -> None:
-        
-        _track =self.track if len(self.track) < FILT_LENGTH else list(itertools.islice(self.track, len(self.track)-FILT_LENGTH, len(self.track)))
-        
+
+        _track = self.track if len(self.track) < FILT_LENGTH else list(
+            itertools.islice(self.track, len(self.track)-FILT_LENGTH, len(self.track)))
+
         mean_x = np.mean([[pos.x for pos in _track]])
         mean_y = np.mean([[pos.y for pos in _track]])
 
         self.filtered_previous = self.filtered
         self.filtered = Position(mean_x, mean_y, self.track[-1].t)
 
+
 class Persistence():
-    def __init__(self):
+
+    def __init__(self, socket: socket.socket):
         self.next_object_id = 0
         self.objects: Iterable[PersistentObject] = []
+        # self.server = socketserver.TCPServer((UI_HOST, UI_PORT), ThreadedTCPRequestHandler)
 
     def add_detection(self, x: float, y: float, detection_type: str, frame: int, time: datetime) -> None:
         min = math.inf
@@ -114,21 +135,25 @@ class Persistence():
                 if (obj.no_detections >= 20):
                     self.objects.remove(obj)
 
-    def send(self) -> None:
-        data = {}
+    def send(self) -> bytes:
+        data = []
         for obj in self.objects:
             pos = obj.filtered
-            data[obj.id] = (pos.x, pos.y, obj.rotation, obj.velocity, obj.detection_type)
-        
-        pp.pprint(data)
+            data.extend[obj.id, pos.x, pos.y, obj.rotation,
+                        obj.velocity, obj.detection_type]
+
+        return np.asarray(data).tobytes()
+        # pp.pprint(data)
+
+class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
+    def _init__(self, persistence: Persistence):
+        self.persistence = persistence
+    
+    def handle(self):
+        data = self.persistence.send()
+        self.request.sendall(data)
 
 def main(args):
-    HOST = '192.168.1.8'  # Standard loopback interface address (whistler)
-    PORT = 65432          # Port to listen on (non-privileged ports are > 1023)
-
-    classes = {0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck', 9: 'traffic light',
-               10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter'}
-
     """
     Alta: 192.168.1.2 https://www.youtube.com/watch?v=1EiC9bvVGnk
     Chamonix: 192.168.1.19 https://www.youtube.com/watch?v=DoUOrTJbIu4
@@ -149,20 +174,23 @@ def main(args):
                                    [-0.00010434468403611912, -0.001968194635173746, 1.0]], np.float32),
     }
 
-    persistence = Persistence()
-
     if not args.no_pygame:
         import pygame
         window = pygame.display.set_mode((1000, 1000))
 
-        typeDimensions = {"car": (4.7, 1.9), "person": (
-            0.25, 0.45), "truck": (5, 2.2), "bus": (10, 2.2)}
-
         colours = {'person': (255, 0, 255), 'bicycle': (255, 255, 0), 'car': (255, 0, 0), 'motorcycle': (0, 0, 0), 'bus': (255, 0, 255), 'truck': (0, 0, 255), 'traffic light': (0, 255, 0),
                    'fire hydrant': (255, 0, 255), 'stop sign': (255, 0, 255), 'parking meter': (255, 0, 255)}
 
+    persistence = Persistence(socket)
+
+    ui_server = socketserver.ThreadingTCPServer((UI_HOST, UI_PORT), ThreadedTCPRequestHandler)
+    server_thread = threading.Thread(target=ui_server.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
+    print("Server loop running in thread:", server_thread.name)
+
     server = socket.socket()
-    server.bind((HOST, PORT))
+    server.bind((SERVER_HOST, SERVER_PORT))
     server.listen(4)
     print('Listening on 192.168.1.8...')
 
@@ -170,8 +198,8 @@ def main(args):
         window.fill((255, 255, 255))
         pygame.display.flip()
 
-    clients = {}
-    client_count = 2
+    # clients = {}
+    # client_count = 2
     client_socket, client_address = server.accept()
     print(client_address, "has connected")
 
@@ -182,6 +210,7 @@ def main(args):
     #     print(f'Waiting on {client_count - (i+1)} more connection(s)')
 
     def closeconnection():
+        ui_server.shutdown()
         server.close()
         print("Connection closed")
 
@@ -190,24 +219,24 @@ def main(args):
     frame = 0
 
     while True:
-        recieved_data = []
+        # recieved_data = []
         # for key in clients:
         #     print(key)
         # clients[client_address].recv(2048)
-        client_socket.recv(2048)
+        recieved_data = client_socket.recv(2048)
 
         data = np.frombuffer(recieved_data)
         cls = []
         pts = []
 
-        # For some reason socket will send packets back of incorrect length, 
+        # For some reason socket will send packets back of incorrect length,
         mod = len(data) % 5
         if mod:
             new_len = len(data) - mod
             if not new_len:
                 continue
             data = data[0:new_len]
-            
+
         for i in range(0, len(data), 5):
             u = data[i+1]*1920
             v = (data[i+2]-data[i+4])*1080
@@ -229,13 +258,11 @@ def main(args):
 
         if not args.no_pygame:
             window.fill((255, 255, 255))
-            for i in range(len(cls)):
+            for obj in persistence.objects:
+                pos = obj.filtered
 
-                x = transformed[i][0][0]
-                y = transformed[i][0][1]
-
-                locationX = x/4
-                locationY = y/4
+                locationX = (pos.x+1000)/4
+                locationY = (pos.y+1000)/4
 
                 pygame.draw.circle(
                     window, colours[cls[i]], (locationX, locationY), 5)
@@ -243,7 +270,9 @@ def main(args):
             pygame.display.flip()
 
         frame += 1
-        persistence.send()
+        if frame == sys.maxsize-1:
+            frame = 0
+        # persistence.send()
 
 
 if __name__ == "__main__":
