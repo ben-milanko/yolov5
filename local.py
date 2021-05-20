@@ -28,9 +28,9 @@ DISTANCE_LIMIT = 200
 TRACK_LENGTH = 200
 FILT_LENGTH = 8
 
-SERVER_HOST = '192.168.1.8'  # Standard loopback interface address (whistler)
+DETECTION_HOST = '192.168.1.8'  # Standard loopback interface address (whistler)
 # Port to listen on (non-privileged ports are > 1023)
-SERVER_PORT = 65432
+DETECTION_PORT = 65432
 
 UI_HOST = '192.168.1.8'
 UI_PORT = 7777
@@ -252,7 +252,7 @@ class Persistence():
 persistence = Persistence()
 
 
-class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
+class UIThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     # def __init__(self, callback, *args, **keys):
     #     self.frame: int = 0
     #     # SocketServer.BaseRequestHandler.__init__(self, *args, **keys)
@@ -260,15 +260,50 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
         print("Client connected to server")
         while True:
-            # if persistence.frame != self.frame:
-            # self.frame = persistence.frame
             data = persistence.send()
             self.request.sendall(data)
             time.sleep(0.1)
-            # else:
-            #     time.sleep(0.01)
+
+class DetectionThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        global frame
+        while True:
+            recieved_data = self.request.recv(2048)
+            data = np.frombuffer(recieved_data)
+            cls = []
+            pts = []
+
+            # For some reason socket will send packets back of incorrect length,
+            mod = len(data) % 5
+            if mod:
+                new_len = len(data) - mod
+                if not new_len:
+                    continue
+                data = data[0:new_len]
+
+            for i in range(0, len(data), 5):
+                u = data[i+1]*1920
+                v = (data[i+2]-data[i+4])*1080
+                pts.append([u, v])
+                cls.append(classes[int(data[i])])
+
+            pts1 = np.asarray(pts, np.float32)
+            pts2 = pts1.reshape(-1, 1, 2).astype(np.float32)
+            transformed = cv2.perspectiveTransform(pts2, H[self.client_address[0]])
+
+            time = datetime.now()
+
+            for i in range(len(cls)):
+                x = transformed[i][0][0]
+                y = transformed[i][0][1]
+                persistence.add_detection(x, y, cls[i], frame, time)
+
+            persistence.fill_in_samples(frame, time)
+
+            frame = frame + 1
 
 def threaded_client(connection, client_address):
+    global frame
     connection.send(str.encode('Welcome to the Servern'))
     while True:
         recieved_data = connection.recv(2048)
@@ -303,40 +338,47 @@ def threaded_client(connection, client_address):
 
         persistence.fill_in_samples(frame, time)
 
+        frame = frame + 1
+
 
 def main(args):
+    global frame
+
+    # detection_server = socketserver.ThreadingTCPServer(
+    #     (DETECTION_HOST, DETECTION_PORT), DetectionThreadedTCPRequestHandler)
+    # detection_server = threading.Thread(target=detection_server.serve_forever)
+    # detection_server.daemon = True
+    # detection_server.start()
+    # print("Detection Server loop running in thread:", detection_server.name)
 
     ui_server = socketserver.ThreadingTCPServer(
-        (UI_HOST, UI_PORT), ThreadedTCPRequestHandler)
-    server_thread = threading.Thread(target=ui_server.serve_forever)
-    server_thread.daemon = True
-    server_thread.start()
-    print("Server loop running in thread:", server_thread.name)
+        (UI_HOST, UI_PORT), UIThreadedTCPRequestHandler)
+    ui_server_thread = threading.Thread(target=ui_server.serve_forever)
+    ui_server_thread.daemon = True
+    ui_server_thread.start()
+    print("UI Server loop running in thread:", ui_server_thread.name)
 
     server = socket.socket()
-    server.bind((SERVER_HOST, SERVER_PORT))
+    server.bind((DETECTION_HOST, DETECTION_PORT))
     server.listen(4)
     print('Listening on 192.168.1.8...')
 
-
-
-    # server.setblocking(0)
-    clients = {}
-    client_count = 2
-    # client_socket, client_address = server.accept()
-    # print(client_address, "has connected")
+    # clients = {}
+    # client_count = 1
+    client_socket, client_address = server.accept()
+    print(client_address, "has connected")
 
     # client_socket.setblocking(False)
-    for i in range(client_count):
-        client_socket, client_address = server.accept()
-        print(client_address, "has connected")
-        clients[client_address] = client_socket
-        print(f'Waiting on {client_count - (i+1)} more connection(s)')
-        start_new_thread(threaded_client, (client_socket, client_address))
+    # for i in range(client_count):
+    #     client_socket, client_address = server.accept()
+    #     print(client_address, "has connected")
+    #     clients[client_address] = client_socket
+    #     print(f'Waiting on {client_count - (i+1)} more connection(s)')
+    #     start_new_thread(threaded_client, (client_socket, client_address))
 
     def closeconnection():
         ui_server.shutdown()
-        server.close()
+        # detection_server.shutdown()
         print("Connection closed")
 
     atexit.register(closeconnection)
@@ -362,58 +404,60 @@ def main(args):
         # # for key in clients:
         # #     print(key)
         # # clients[client_address].recv(2048)
-        # recieved_data = client_socket.recv(2048)
+        recieved_data = client_socket.recv(2048)
 
-        # data = np.frombuffer(recieved_data)
-        # cls = []
-        # pts = []
+        data = np.frombuffer(recieved_data)
+        cls = []
+        pts = []
 
-        # # Pcakets 
-        # mod = len(data) % 5
-        # if mod:
-        #     new_len = len(data) - mod
-        #     if not new_len:
-        #         continue
-        #     data = data[0:new_len]
+        # Packets 
+        mod = len(data) % 5
+        if mod:
+            new_len = len(data) - mod
+            if not new_len:
+                continue
+            data = data[0:new_len]
 
-        # for i in range(0, len(data), 5):
-        #     u = data[i+1]*1920
-        #     v = (data[i+2]-data[i+4])*1080
-        #     pts.append([u, v])
-        #     cls.append(classes[int(data[i])])
+        for i in range(0, len(data), 5):
+            u = data[i+1]*1920
+            v = (data[i+2]-data[i+4])*1080
+            pts.append([u, v])
+            cls.append(classes[int(data[i])])
 
-        # pts1 = np.asarray(pts, np.float32)
-        # pts2 = pts1.reshape(-1, 1, 2).astype(np.float32)
-        # transformed = cv2.perspectiveTransform(pts2, H[client_address[0]])
+        pts1 = np.asarray(pts, np.float32)
+        pts2 = pts1.reshape(-1, 1, 2).astype(np.float32)
+        transformed = cv2.perspectiveTransform(pts2, H[client_address[0]])
 
-        # time = datetime.now()
+        time = datetime.now()
 
-        # for i in range(len(cls)):
-        #     x = transformed[i][0][0]
-        #     y = transformed[i][0][1]
-        #     persistence.add_detection(x, y, cls[i], frame, time)
+        for i in range(len(cls)):
+            x = transformed[i][0][0]
+            y = transformed[i][0][1]
+            persistence.add_detection(x, y, cls[i], frame, time)
 
-        # persistence.fill_in_samples(frame, time)
+        persistence.fill_in_samples(frame, time)
 
         if not args.no_pygame:
             pygame.time.Clock().tick(60)
             window.fill((255, 255, 255))
             for obj in persistence.objects:
-                for i in range(len(obj.filtered_track),0, -1):
+                for i in range(len(obj.filtered_track)-1,-1,-1):
+                    
+                    if i in range(len(obj.track)):
+                        pos = obj.filtered_track[i]
+                        locationX = int((pos.x+xOff)/scale)
+                        locationY = int((pos.y+yOff)/scale)
 
-                    pos = obj.filtered_track[i]
-                    locationX = int((pos.x+xOff)/scale)
-                    locationY = int((pos.y+yOff)/scale)
+                        pygame.draw.circle(
+                            window, colours[obj.detection_type], (locationX, locationY), 5 if i == len(obj.filtered_track)-1 else 3)
 
-                    pygame.draw.circle(
-                        window, colours[obj.detection_type], (locationX, locationY), 5 if i == len(obj.filtered_track)-1 else 3)
+                    if i in range(len(obj.track)):
+                        pos = obj.track[i]
+                        locationX = int((pos.x+xOff)/scale)
+                        locationY = int((pos.y+yOff)/scale)
 
-                    pos = obj.track[i]
-                    locationX = int((pos.x+xOff)/scale)
-                    locationY = int((pos.y+yOff)/scale)
-
-                    pygame.draw.circle(
-                        window, (0,0,0), (locationX, locationY), 3)
+                        pygame.draw.circle(
+                            window, (0,0,0), (locationX, locationY), 3)
 
                 for i in range(10):
 
@@ -426,9 +470,9 @@ def main(args):
 
             pygame.display.flip()
 
-        # frame += 1
-        # if frame == sys.maxsize-1:
-        #     frame = 0
+        frame += 1
+        if frame == sys.maxsize-1:
+            frame = 0
         # persistence.send()
         # ui_server.handle_request()
 
