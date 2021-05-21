@@ -21,14 +21,17 @@ from _thread import *
 def func(t, a, b, c, d):
     return a*t**3 + b*t**2 + c*t+d
 
+
 def func2(t, a, b, c):
     return a*t**2 + b*t + c
+
 
 DISTANCE_LIMIT = 200
 TRACK_LENGTH = 200
 FILT_LENGTH = 8
 
-DETECTION_HOST = '192.168.1.8'  # Standard loopback interface address (whistler)
+# Standard loopback interface address (whistler)
+DETECTION_HOST = '192.168.1.8'
 # Port to listen on (non-privileged ports are > 1023)
 DETECTION_PORT = 65432
 
@@ -42,6 +45,8 @@ scale = 6
 xOff = 1000
 yOff = 2000
 
+tstamp = datetime.now()
+
 classes = {0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck', 9: 'traffic light',
            10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter'}
 
@@ -52,17 +57,17 @@ Hakuba: 192.168.1.4 https://www.youtube.com/watch?v=6aJXND_Lfk8
 """
 H = {
     '192.168.1.2': np.asarray([[-8.41029555e-02, -7.15153371e-01,  2.40736158e+02],
-                                [-2.54633255e-01, -2.38135796e+00,
+                               [-2.54633255e-01, -2.38135796e+00,
                                 1.46226117e+03],
-                                [-7.54610883e-05, -2.14064010e-03,  1.00000000e+00]], np.float32),
+                               [-7.54610883e-05, -2.14064010e-03,  1.00000000e+00]], np.float32),
     '192.168.1.19': np.asarray([[-0.06279556328526636, -0.8439838464409983, 636.6910024019749],
                                 [0.06002566118702526, -
                                     1.1014093105498994, 735.4478378609678],
                                 [-2.306609260541101e-05, -0.0014515780045251873, 1.0]], np.float32),
     '192.168.1.4': np.asarray([[-0.07137254811611343, -0.7789136260243587, 309.4492984150035],
-                                [-0.32071794990736197, -
+                               [-0.32071794990736197, -
                                 0.8947839825237189, 751.4388837007813],
-                                [-0.00010434468403611912, -0.001968194635173746, 1.0]], np.float32),
+                               [-0.00010434468403611912, -0.001968194635173746, 1.0]], np.float32),
 }
 
 
@@ -162,7 +167,7 @@ class PersistentObject():
             except:
                 # self.poptX = [0, 0, 0, 0]
                 # self.poptY = [0, 0, 0, 0]
-            # print(self.poptX, self.poptY)
+                # print(self.poptX, self.poptY)
                 self.poptY = [0, 0, 0]
                 self.poptX = [0, 0, 0]
             # plt.plot(t, func(t, *self.poptX), label="Fitted Curve")
@@ -184,7 +189,8 @@ class PersistentObject():
     def future(self, time: float) -> tuple:
         x = func2(time, *self.poptX)
         y = func2(time, *self.poptY)
-        return (x,y)
+        return (x, y)
+
 
 class Persistence():
     def __init__(self):
@@ -241,12 +247,13 @@ class Persistence():
             pos = obj.filtered
             cls = next(key for key, value in classes.items()
                        if value == obj.detection_type)
-            data.extend([obj.id, pos.x, pos.y, obj.rotation,
-                        obj.velocity, cls, obj.timestamp.timestamp()])
-            # data.extend([obj.id, pos.x, pos.y, obj.rotation, obj.velocity, cls, obj.timestamp.timestamp(), *obj.poptX, *obj.poptY])
-        print(f"{len(data)/7} Objects detected")
+            # data.extend([obj.id, pos.x, pos.y, obj.rotation,
+            #             obj.velocity, cls, obj.timestamp.timestamp()])
+            data.extend([obj.id, pos.x, pos.y, obj.rotation, obj.velocity,
+                        cls, (obj.timestamp-tstamp).total_seconds(), obj.poptX[0],obj.poptX[1],obj.poptX[2], obj.poptY[0],obj.poptY[1], obj.poptY[2]])
+        print(f"{len(data)/13} Objects detected")
         print(data)
-        return np.asarray(data).tobytes()
+        return np.asarray(data, dtype=np.float32).tobytes()
 
 
 persistence = Persistence()
@@ -264,82 +271,45 @@ class UIThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             self.request.sendall(data)
             time.sleep(0.1)
 
-class DetectionThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
-    def handle(self):
-        global frame
-        while True:
-            recieved_data = self.request.recv(2048)
-            data = np.frombuffer(recieved_data)
-            cls = []
-            pts = []
 
-            # For some reason socket will send packets back of incorrect length,
-            mod = len(data) % 5
-            if mod:
-                new_len = len(data) - mod
-                if not new_len:
-                    continue
-                data = data[0:new_len]
+# class DetectionThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
+#     def handle(self):
+#         global frame
+#         while True:
+#             recieved_data = self.request.recv(2048)
+#             data = np.frombuffer(recieved_data)
+#             cls = []
+#             pts = []
 
-            for i in range(0, len(data), 5):
-                u = data[i+1]*1920
-                v = (data[i+2]-data[i+4])*1080
-                pts.append([u, v])
-                cls.append(classes[int(data[i])])
+#             # For some reason socket will send packets back of incorrect length,
+#             mod = len(data) % 5
+#             if mod:
+#                 new_len = len(data) - mod
+#                 if not new_len:
+#                     continue
+#                 data = data[0:new_len]
 
-            pts1 = np.asarray(pts, np.float32)
-            pts2 = pts1.reshape(-1, 1, 2).astype(np.float32)
-            transformed = cv2.perspectiveTransform(pts2, H[self.client_address[0]])
+#             for i in range(0, len(data), 5):
+#                 u = data[i+1]*1920
+#                 v = (data[i+2]-data[i+4])*1080
+#                 pts.append([u, v])
+#                 cls.append(classes[int(data[i])])
 
-            time = datetime.now()
+#             pts1 = np.asarray(pts, np.float32)
+#             pts2 = pts1.reshape(-1, 1, 2).astype(np.float32)
+#             transformed = cv2.perspectiveTransform(
+#                 pts2, H[self.client_address[0]])
 
-            for i in range(len(cls)):
-                x = transformed[i][0][0]
-                y = transformed[i][0][1]
-                persistence.add_detection(x, y, cls[i], frame, time)
+#             time = datetime.now()
 
-            persistence.fill_in_samples(frame, time)
+#             for i in range(len(cls)):
+#                 x = transformed[i][0][0]
+#                 y = transformed[i][0][1]
+#                 persistence.add_detection(x, y, cls[i], frame, time)
 
-            frame = frame + 1
+#             persistence.fill_in_samples(frame, time)
 
-def threaded_client(connection, client_address):
-    global frame
-    connection.send(str.encode('Welcome to the Servern'))
-    while True:
-        recieved_data = connection.recv(2048)
-        data = np.frombuffer(recieved_data)
-        cls = []
-        pts = []
-
-        # For some reason socket will send packets back of incorrect length,
-        mod = len(data) % 5
-        if mod:
-            new_len = len(data) - mod
-            if not new_len:
-                continue
-            data = data[0:new_len]
-
-        for i in range(0, len(data), 5):
-            u = data[i+1]*1920
-            v = (data[i+2]-data[i+4])*1080
-            pts.append([u, v])
-            cls.append(classes[int(data[i])])
-
-        pts1 = np.asarray(pts, np.float32)
-        pts2 = pts1.reshape(-1, 1, 2).astype(np.float32)
-        transformed = cv2.perspectiveTransform(pts2, H[client_address[0]])
-
-        time = datetime.now()
-
-        for i in range(len(cls)):
-            x = transformed[i][0][0]
-            y = transformed[i][0][1]
-            persistence.add_detection(x, y, cls[i], frame, time)
-
-        persistence.fill_in_samples(frame, time)
-
-        frame = frame + 1
-
+#             frame = frame + 1
 
 def main(args):
     global frame
@@ -377,6 +347,7 @@ def main(args):
     #     start_new_thread(threaded_client, (client_socket, client_address))
 
     def closeconnection():
+        server.close()
         ui_server.shutdown()
         # detection_server.shutdown()
         print("Connection closed")
@@ -393,7 +364,7 @@ def main(args):
         pygame.display.flip()
 
     while True:
-        
+
         # client, address = server.accept()
         # print('Connected to: ' + address[0] + ':' + str(address[1]))
         # start_new_thread(threaded_client, (client, address))
@@ -410,7 +381,7 @@ def main(args):
         cls = []
         pts = []
 
-        # Packets 
+        # Packets
         mod = len(data) % 5
         if mod:
             new_len = len(data) - mod
@@ -441,8 +412,8 @@ def main(args):
             pygame.time.Clock().tick(60)
             window.fill((255, 255, 255))
             for obj in persistence.objects:
-                for i in range(len(obj.filtered_track)-1,-1,-1):
-                    
+                for i in range(len(obj.filtered_track)-1, -1, -1):
+
                     if i in range(len(obj.track)):
                         pos = obj.filtered_track[i]
                         locationX = int((pos.x+xOff)/scale)
@@ -457,7 +428,7 @@ def main(args):
                         locationY = int((pos.y+yOff)/scale)
 
                         pygame.draw.circle(
-                            window, (0,0,0), (locationX, locationY), 3)
+                            window, (0, 0, 0), (locationX, locationY), 3)
 
                 for i in range(10):
 
